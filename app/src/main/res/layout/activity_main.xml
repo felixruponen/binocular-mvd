@@ -1,0 +1,66 @@
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:paddingBottom="@dimen/activity_vertical_margin"
+    android:paddingLeft="@dimen/activity_horizontal_margin"
+    android:paddingRight="@dimen/activity_horizontal_margin"
+    android:paddingTop="@dimen/activity_vertical_margin"
+    tools:context=".MainActivity">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/firebase_start"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="start FB"/>
+
+        <Button
+            android:id="@+id/firebase_out"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SEND FB"/>
+
+        <TextView
+            android:id="@+id/firebase_in"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="FB IN"
+            android:textSize="20sp"/>
+
+    </LinearLayout>
+
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/http_start"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="start HTTP"/>
+
+        <Button
+            android:id="@+id/http_out"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SEND HTTP"/>
+
+        <TextView
+            android:id="@+id/http_in"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="HTTP IN"
+            android:textSize="20sp"/>
+
+    </LinearLayout>
+
+</LinearLayout>
