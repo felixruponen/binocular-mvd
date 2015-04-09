@@ -13,13 +13,20 @@ import com.firebase.client.DataSnapshot;
 import com.firebase.client.Firebase;
 import com.firebase.client.FirebaseError;
 
+import java.util.List;
+
 import cc.arduino.mvd.MvdHelper;
 import cc.arduino.mvd.MvdServiceReceiver;
+import cc.arduino.mvd.models.Binding;
+import cc.arduino.mvd.models.CodePinValue;
+import cc.arduino.mvd.models.ServiceRoute;
+
+import static cc.arduino.mvd.MvdHelper.DEBUG;
 
 /**
  * This is the Firebase integration of MVD.
  *
- * @author Andreas Goransson
+ * @author Andreas Goransson, 2015-03-13
  */
 public class FirebaseService extends Service {
 
@@ -29,11 +36,9 @@ public class FirebaseService extends Service {
 
   private Firebase firebase;
 
-  private String lastChangedCode = null;
-  private String lastChangedPin = null;
-  private String lastChangedValue = null;
-
   private boolean started = false;
+
+  private CodePinValue lastCodePinValue;
 
   @Override
   public void onCreate() {
@@ -60,6 +65,10 @@ public class FirebaseService extends Service {
       firebase.addChildEventListener(childListener);
 
       started = true;
+
+      if (DEBUG) {
+        Log.d(TAG, TAG + " started.");
+      }
     }
 
     return START_STICKY;
@@ -74,6 +83,10 @@ public class FirebaseService extends Service {
     firebase.removeEventListener(childListener);
 
     firebase = null;
+
+    if (DEBUG) {
+      Log.d(TAG, TAG + " stopped.");
+    }
   }
 
   @Override
@@ -85,17 +98,25 @@ public class FirebaseService extends Service {
     @Override
     public void onChildAdded(DataSnapshot dataSnapshot, String s) {
       String code = dataSnapshot.getKey();
-      Object pin = dataSnapshot.getValue();
+      Iterable<DataSnapshot> pinValues = dataSnapshot.getChildren();
+      for (DataSnapshot pinValue : pinValues) {
+        String pin = pinValue.getKey();
+        String value = pinValue.getValue().toString();
 
-//      handleKeyValFromFirebase(key, val);
+        handleKeyValFromFirebase(code, pin, value);
+      }
     }
 
     @Override
     public void onChildChanged(DataSnapshot dataSnapshot, String s) {
       String code = dataSnapshot.getKey();
-      Object pin = dataSnapshot.getValue();
+      Iterable<DataSnapshot> pinValues = dataSnapshot.getChildren();
+      for (DataSnapshot pinValue : pinValues) {
+        String pin = pinValue.getKey();
+        String value = pinValue.getValue().toString();
 
-//      handleKeyValFromFirebase(key, val) ;
+        handleKeyValFromFirebase(code, pin, value);
+      }
     }
 
     @Override
@@ -123,18 +144,64 @@ public class FirebaseService extends Service {
    * @param value
    */
   private void handleKeyValFromFirebase(String code, String pin, String value) {
-    if (lastChangedCode != null && lastChangedPin != null && lastChangedValue != null) {
-      if (!lastChangedCode.equals(code) && !lastChangedPin.equals(pin) && !lastChangedValue.equals(value)) {
-        // This was not me, I'll go ahead and broadcast the value "down" to other services
-        String target = "BluetoothService";
-        MvdHelper.sendDownBroadcast(getApplicationContext(), TAG, target, code, pin, value);
-      } else {
-        // Do nothing, I just wrote this value myself!
+    CodePinValue codePinValue = new CodePinValue(code, pin, value);
+
+    // First read, just store the last values.
+    if (lastCodePinValue == null) {
+      if (DEBUG) {
+        Log.d(TAG, "First read.");
+        Log.d(TAG, codePinValue.toString());
       }
-    } else {
-      // Ignore the first read!
+
+      lastCodePinValue = codePinValue;
     }
 
+    // Someone else changed the values in the cloud, I should react to it!
+    else if (!lastCodePinValue.equals(codePinValue)) {
+      if (DEBUG) {
+        Log.d(TAG, "I got the following from Firebase:");
+        Log.d(TAG, codePinValue.toString());
+      }
+
+      // This was not me editing, I'll go ahead and broadcast the value "down" to other services
+      // (The value is from "me", but it was edited by someone else in Firebase so I'll mask it as "me"
+      String source = TAG;
+
+      // Find a forwarding where I am included
+      List<ServiceRoute> routes = ServiceRoute.find(ServiceRoute.class, "service1 = ? OR service2 = ?", TAG, TAG);
+      for (ServiceRoute route : routes) {
+        if (DEBUG) {
+          Log.d(TAG, "Found route! " + route.getService1() + "-" + route.getService2());
+        }
+
+        // Get the target
+        String target = MvdHelper.getServiceTarget(route, TAG);
+
+        // Send the broadcast
+        MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
+      }
+
+      // Find a forwarding where I am included
+      List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
+      for (Binding binding : bindings) {
+        if (DEBUG) {
+          Log.d(TAG, "Found binding for " + binding.getCode() + "/" + binding.getPin() + " to " + binding.getService());
+        }
+
+        // Get the target (For bindings this is always the BeanService in the DOWN direction)
+        String target = BeanService.class.getSimpleName();
+
+        String mac = binding.getMac();
+
+        // Send the broadcast
+        MvdHelper.sendBeanDownBroadcast(getApplicationContext(), source, target, mac, codePinValue);
+      }
+    }
+
+    // I wrote these changes, I shouldn't care about informing anyone else
+    else {
+      // Do nothing
+    }
   }
 
   /**
@@ -149,38 +216,57 @@ public class FirebaseService extends Service {
       String target = intent.getStringExtra(MvdHelper.EXTRA_TARGET);
       String sender = intent.getStringExtra(MvdHelper.EXTRA_SENDER);
 
-      String code = intent.getStringExtra(MvdHelper.EXTRA_CODE);
-      String pin = intent.getStringExtra(MvdHelper.EXTRA_PIN);
-      String value = intent.getStringExtra(MvdHelper.EXTRA_VALUE);
+      CodePinValue codePinValue = null;
 
-      Log.d(TAG, "TARGET: " + target);
-      Log.d(TAG, "SENDER: " + sender);
-      Log.d(TAG, "code: " + code);
-      Log.d(TAG, "pin: " + pin);
-      Log.d(TAG, "value: " + value);
+      // If we're getting the primitives...
+      if (intent.hasExtra(MvdHelper.EXTRA_CODE) &&
+          intent.hasExtra(MvdHelper.EXTRA_PIN) &&
+          intent.hasExtra(MvdHelper.EXTRA_VALUE)) {
+        String code = intent.getStringExtra(MvdHelper.EXTRA_CODE);
+        String pin = intent.getStringExtra(MvdHelper.EXTRA_PIN);
+        String value = intent.getStringExtra(MvdHelper.EXTRA_VALUE);
 
-      if (!sender.equals(TAG)) {
-        // If we're getting values from another service
-        if (action.equals(MvdHelper.ACTION_UP)) {
-          if (target.equals(TAG)) {
-            firebase.child(code).child(pin).setValue(value);
-            lastChangedCode = code;
-            lastChangedPin = pin;
-            lastChangedValue = value;
-          }
+        codePinValue = new CodePinValue(code, pin, value);
+      }
+
+      // ... or if we're getting the serializable
+      else if (intent.hasExtra(MvdHelper.EXTRA_CODE_PIN_VALUE)) {
+        codePinValue = (CodePinValue) intent.getSerializableExtra(MvdHelper.EXTRA_CODE_PIN_VALUE);
+      }
+
+      // Make sure we've got a valid key-value set.
+      if (codePinValue != null) {
+
+        if (DEBUG) {
+          Log.d(TAG, codePinValue.toString());
         }
 
-        // Or if we've getting values from the "cloud" services
-        else if (action.equals(MvdHelper.ACTION_DOWN)) {
-          if (target.equals(TAG)) {
-            firebase.child(code).child(pin).setValue(value);
-            lastChangedCode = code;
-            lastChangedPin = pin;
-            lastChangedValue = value;
+        if (!sender.equals(TAG)) {
+          // If we're getting values from the Bean service (UP direction)
+          if (action.equals(MvdHelper.ACTION_UP)) {
+            // Make sure the value is intended for us
+            if (target.equals(TAG)) {
+              firebase.child(codePinValue.getCode()).child(codePinValue.getPin()).setValue(codePinValue.getValue());
+
+              lastCodePinValue = codePinValue;
+            }
+          }
+
+          // Or if we've getting values from other "cloud" services (DOWN direction) we should write to Firebase too
+          else if (action.equals(MvdHelper.ACTION_DOWN)) {
+            // Make sure the value is intended for us
+            if (target.equals(TAG)) {
+              firebase.child(codePinValue.getCode()).child(codePinValue.getPin()).setValue(codePinValue.getValue());
+
+              lastCodePinValue = codePinValue;
+            }
+          }
+        } else {
+          // Do nothing, this was myself broadcasting values
+          if (DEBUG) {
+            Log.d(TAG, "I just forwarded a value to another service (" + target + ")");
           }
         }
-      } else {
-        // Do nothing, this was me broadcasting
       }
 
       // If someone told me to kill myself...

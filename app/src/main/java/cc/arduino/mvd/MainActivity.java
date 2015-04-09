@@ -1,3 +1,19 @@
+/*
+ * Copyright 2015 Arduino Verkstad AB
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package cc.arduino.mvd;
 
 import android.content.Intent;
@@ -10,7 +26,10 @@ import android.widget.TextView;
 import cc.arduino.mvd.services.FirebaseService;
 import cc.arduino.mvd.services.HttpService;
 
-
+/**
+ * This is the required activity, without it the app won't work. The app will need to be run AT LEAST
+ * once to register receivers and services properly.
+ */
 public class MainActivity extends ActionBarActivity {
 
   private static final String TAG = MainActivity.class.getSimpleName();
@@ -25,6 +44,8 @@ public class MainActivity extends ActionBarActivity {
     setupFirebaseTest();
 
     setupHttpTest();
+
+    MvdHelper.loadDebug(getApplicationContext());
   }
 
   private void setupFirebaseTest() {
@@ -51,12 +72,12 @@ public class MainActivity extends ActionBarActivity {
         toggle = !toggle;
         if (toggle) {
           Intent start = new Intent(MvdServiceReceiver.ACTION_START_SERVICE);
-          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, MvdServiceReceiver.FIREBASE);
+          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, FirebaseService.class.getSimpleName());
           start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_URL, "https://mvdtest.firebaseio.com/");
           sendBroadcast(start);
         } else {
           Intent start = new Intent(MvdServiceReceiver.ACTION_STOP_SERVICE);
-          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, MvdServiceReceiver.FIREBASE);
+          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, FirebaseService.class.getSimpleName());
           sendBroadcast(start);
         }
       }
@@ -87,13 +108,13 @@ public class MainActivity extends ActionBarActivity {
         toggle = true; //!toggle;
         if (toggle) {
           Intent start = new Intent(MvdServiceReceiver.ACTION_START_SERVICE);
-          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, MvdServiceReceiver.HTTP);
+          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, HttpService.class.getSimpleName());
           start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_URL, "http://188.226.207.177/");
           start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_DELAY, 5000);
           sendBroadcast(start);
         } else {
           Intent start = new Intent(MvdServiceReceiver.ACTION_STOP_SERVICE);
-          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, MvdServiceReceiver.HTTP);
+          start.putExtra(MvdServiceReceiver.EXTRA_SERVICE_NAME, HttpService.class.getSimpleName());
           sendBroadcast(start);
         }
       }

@@ -1,62 +1,78 @@
+/*
+ * Copyright 2015 Arduino Verkstad AB
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package cc.arduino.mvd.services;
 
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothGatt;
-import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothManager;
-import android.bluetooth.BluetoothProfile;
-import android.bluetooth.le.BluetoothLeScanner;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.ParcelUuid;
 import android.util.Log;
 
-import com.firebase.client.Firebase;
-
-import java.util.UUID;
+import java.io.IOException;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import cc.arduino.mvd.MvdHelper;
 import cc.arduino.mvd.MvdServiceReceiver;
+import cc.arduino.mvd.models.Binding;
+import cc.arduino.mvd.models.CodePinValue;
+import cc.arduino.mvd.models.ServiceRoute;
+import nl.littlerobots.bean.Bean;
+import nl.littlerobots.bean.BeanDiscoveryListener;
+import nl.littlerobots.bean.BeanListener;
+import nl.littlerobots.bean.BeanManager;
+
+import static cc.arduino.mvd.MvdHelper.DEBUG;
 
 /**
- * This is the Bean (Bluetooth LE) integration of MVD.
+ * This is the Bean integration of MVD.
  *
- * @author Andreas Goransson
+ * @author Andreas Goransson, 2015-03-19
  */
 public class BeanService extends Service {
 
   private static final String TAG = BeanService.class.getSimpleName();
 
-  public static final String ACTION_GATT_CONNECTED = "cc.arduino.mvd.bean.actions.GATT_CONNECTED";
-  public static final String ACTION_GATT_DISCONNECTED = "cc.arduino.mvd.bean.actions.GATT_DISCONNECTED";
-  public static final String ACTION_GATT_SERVICES_DISCOVERED = "cc.arduino.mvd.bean.actions.GATT_SERVICES_DISCOVERED";
-  public static final String ACTION_GATT_DATA_AVAILABLE = "cc.arduino.mvd.bean.actions.DATA_AVAILABLE";
-  public static final String EXTRA_DATA = "cc.arduino.mvd.bean.extras.DATA";
-
-  public static final int STATE_DISCONNECTED = 1;
-  public static final int STATE_CONNECTING = 2;
-  public static final int STATE_CONNECTED = 3;
-
-  private BluetoothManager bluetoothManager;
-
-  private BluetoothAdapter bluetoothAdapter;
-
-  private int connectionState = STATE_DISCONNECTED;
-
   private Handler handler;
 
-  private long scanTimeout = 3000;
+  private long scanTimeout = 1000;
 
-  private String mac = null;
+  private int delay = 1000; // Default polling for Bean sensors
 
-  private UUID BEAN_UUID = UUID.fromString("a495ff10-c5b1-4b44-b512-1370f02d74de");
+  private ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(5);
+
+  private ScheduledFuture scheduledFuture;
+
+  private Map<String, Bean> beans = new HashMap<>();
+
+  private CodePinValue lastCodePinValue = null;
 
   @Override
   public void onCreate() {
@@ -64,28 +80,49 @@ public class BeanService extends Service {
 
     handler = new Handler(getMainLooper());
 
-    bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+    BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
 
-    bluetoothAdapter = bluetoothManager.getAdapter();
+    BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
 
     IntentFilter filter = new IntentFilter();
     filter.addAction(MvdHelper.ACTION_UP);
     filter.addAction(MvdHelper.ACTION_DOWN);
     filter.addAction(MvdHelper.ACTION_KILL);
     filter.addAction(MvdHelper.ACTION_SCAN);
+    filter.addAction(MvdServiceReceiver.ACTION_ADD_BEAN);
+    filter.addAction(MvdServiceReceiver.ACTION_REMOVE_BEAN);
+
+    filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
 
     registerReceiver(broadcastReceiver, filter);
+
+    if (!bluetoothAdapter.isEnabled()) {
+      if (DEBUG) {
+        Log.d(TAG, "Turning on Bluetooth");
+      }
+      boolean result = bluetoothAdapter.enable();
+      if (DEBUG) {
+        Log.d(TAG, "result: " + result);
+      }
+    } else {
+      if (DEBUG) {
+        Log.d(TAG, "Bluetooth is enabled");
+      }
+    }
   }
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
-    Log.d(TAG, "onStartCommmand1");
     if (intent != null) {
-      mac = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC);
       scanTimeout = intent.getIntExtra(MvdServiceReceiver.EXTRA_SERVICE_TIMEOUT, 3000);
 
-      // TODO: Start something?
-      Log.d(TAG, "onStartCommmand2");
+      delay = intent.getIntExtra(MvdServiceReceiver.EXTRA_SERVICE_DELAY, 1000);
+
+      startPullRequests(delay);
+
+      if (DEBUG) {
+        Log.d(TAG, TAG + " started.");
+      }
     }
 
     return START_STICKY;
@@ -97,13 +134,59 @@ public class BeanService extends Service {
 
     unregisterReceiver(broadcastReceiver);
 
-    // TODO: Kill bluetooth connections
+    disconnectAllDevices();
+
+    stopGetRequests();
+
+    if (DEBUG) {
+      Log.d(TAG, TAG + " stopped.");
+    }
   }
 
   @Override
   public IBinder onBind(Intent intent) {
-    // TODO: Return the communication channel to the service.
     throw new UnsupportedOperationException("Not yet implemented");
+  }
+
+  private void startPullRequests(int delay) {
+    Runnable task = new Runnable() {
+      @Override
+      public void run() {
+        Iterator it = beans.entrySet().iterator();
+        while (it.hasNext()) {
+          Map.Entry pair = (Map.Entry) it.next();
+
+          Bean bean = (Bean) pair.getValue();
+          sendPollMessage(bean);
+        }
+      }
+    };
+
+    scheduledFuture = scheduler.scheduleAtFixedRate(
+        task,
+        delay,
+        delay,
+        TimeUnit.MILLISECONDS
+    );
+  }
+
+  /**
+   * This sends a polling notification to the bean, which will tell the bean to send values for all it's sensors.
+   *
+   * @param bean
+   */
+  private void sendPollMessage(Bean bean) {
+    // TODO: Fix this polling message!
+    String msg = "asd" + "\n";
+
+    bean.sendSerialMessage(msg);
+  }
+
+  /**
+   * Stop the recurring POLL's
+   */
+  private void stopGetRequests() {
+    scheduledFuture.cancel(true);
   }
 
   /**
@@ -114,145 +197,104 @@ public class BeanService extends Service {
   private void scanDevices(boolean scan) {
     // Start scanning
     if (scan) {
-      Log.d(TAG, "Starting LE scan...");
+      Log.d(TAG, "Starting bean scan...");
       handler.postDelayed(new Runnable() {
         @Override
         public void run() {
-          Log.d(TAG, "Stopping LE scan.");
-          // MVD is not API21, use deprecated method
-          bluetoothAdapter.stopLeScan(leScanCallback);
+          Log.d(TAG, "Stopping bean scan.");
+          BeanManager.getInstance().cancelDiscovery();
         }
       }, scanTimeout);
 
-      // MVD is not API21, use deprecated method
-      bluetoothAdapter.startLeScan(leScanCallback);
+      BeanManager.getInstance().startDiscovery(beanDiscoveryListener);
     }
 
     // Otherwise stop scanning
     else {
-      Log.d(TAG, "Stopping LE scan.");
-      // MVD is not API21, so we need to use this method.
-      bluetoothAdapter.stopLeScan(leScanCallback);
+      Log.d(TAG, "Stopping BEAN scan.");
+      BeanManager.getInstance().cancelDiscovery();
     }
   }
 
   /**
-   * Used by the LE scan.
+   * Attempt to connect to a Bean
+   *
+   * @param mac
    */
-  private BluetoothAdapter.LeScanCallback leScanCallback = new BluetoothAdapter.LeScanCallback() {
-    @Override
-    public void onLeScan(BluetoothDevice device, int rssi, byte[] scanRecord) {
-      String name = device.getName();
-      String address = device.getAddress();
-      ParcelUuid[] uuids = device.getUuids();
+  private void connectToDevice(String mac) {
+    if (DEBUG) {
+      Log.d(TAG, "Attempting to connect to " + mac);
+    }
 
-      StringBuilder sb = new StringBuilder();
-      sb.append("Found new LE device ").append("(rssi: ").append(rssi).append(")").append("\n");
-      sb.append(name).append(", ").append(address).append("\n");
-      sb.append("Services (uuid's):").append("\n");
-      if (uuids != null) {
-        for (int i = 0; i < uuids.length; i++) {
-          String uuid = uuids[i].getUuid().toString();
-          sb.append(uuid);
-        }
+    Collection<Bean> scannedBeans = BeanManager.getInstance().getBeans();
+    boolean beanFound = false;
+    for (Bean bean : scannedBeans) {
+      if (bean.getDevice().getAddress().equals(mac)) {
+        bean.connect(getApplicationContext(), new MvdBeanListener(bean.getDevice().getAddress()));
+
+        beans.put("mac", bean);
+
+        beanFound = true;
+      }
+    }
+
+    if (!beanFound) {
+      Log.e(TAG, "I couldn't find any bean with address [" + mac + "]");
+    }
+  }
+
+  /**
+   * Attempt to disconnect a device.
+   *
+   * @param mac
+   */
+  private void disconnectDevice(String mac) {
+    if (DEBUG) {
+      Log.d(TAG, "Attempting to disconnect " + mac);
+    }
+
+    if (beans.containsKey(mac)) {
+      Bean bean = beans.remove(mac);
+
+      if (bean.isConnected()) {
+        bean.disconnect();
       } else {
-        sb.append("...");
+        Log.e(TAG, "The Bean was not connected, but I made sure to remove it from my library anyway.");
       }
-
-      Log.d(TAG, sb.toString());
-      Log.d(TAG, "");
-    }
-  };
-
-  /**
-   * Attempt to connect to a BluetoothDevice
-   */
-  private void connectToDevice() {
-    BluetoothDevice device = bluetoothAdapter.getRemoteDevice(mac);
-
-    device.connectGatt(this, false, bluetoothGattCallback);
-  }
-
-  /**
-   * This is used when connecting to a GATT device.
-   */
-  private BluetoothGattCallback bluetoothGattCallback = new BluetoothGattCallback() {
-
-    @Override
-    public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
-      String intentAction;
-
-      // If I connected
-      if (newState == BluetoothProfile.STATE_CONNECTED) {
-        intentAction = ACTION_GATT_CONNECTED;
-        connectionState = STATE_CONNECTED;
-        broadcastUpdate(intentAction);
-      }
-
-      // If I disconnected
-      else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-        intentAction = ACTION_GATT_DISCONNECTED;
-        connectionState = STATE_DISCONNECTED;
-        broadcastUpdate(intentAction);
-      }
-    }
-
-    @Override
-    public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-      if (status == BluetoothGatt.GATT_SUCCESS) {
-        broadcastUpdate(ACTION_GATT_SERVICES_DISCOVERED);
-      }
-    }
-
-    @Override
-    public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
-      if (status == BluetoothGatt.GATT_SUCCESS) {
-        broadcastUpdate(ACTION_GATT_DATA_AVAILABLE, characteristic);
-      }
-    }
-  };
-
-  /**
-   * Send a broadcast in response to GATT events
-   *
-   * @param action The action that happened
-   */
-  private void broadcastUpdate(final String action) {
-    final Intent intent = new Intent(action);
-    sendBroadcast(intent);
-  }
-
-  /**
-   * Send a broadcast in response to received GATT characteristics
-   *
-   * @param action         The action that happened
-   * @param characteristic The values
-   */
-  private void broadcastUpdate(final String action, final BluetoothGattCharacteristic characteristic) {
-    // This is special handling for the Heart Rate Measurement profile. Data
-    // parsing is carried out as per profile specifications.
-    if (characteristic.getUuid().equals(BEAN_UUID)) {
-      // TODO: Handle data...
-
-      // We're sending an "UP" event to other services to listen for
-      Intent intent = new Intent(MvdHelper.ACTION_UP);
-
-      String target = "mvd_blah";
-      String code = "asd";
-      String pin = "345";
-      String value = "234567";
-
-      intent.putExtra(MvdHelper.EXTRA_SENDER, TAG);
-      intent.putExtra(MvdHelper.EXTRA_TARGET, target);
-      intent.putExtra(MvdHelper.EXTRA_CODE, code);
-      intent.putExtra(MvdHelper.EXTRA_PIN, pin);
-      intent.putExtra(MvdHelper.EXTRA_VALUE, value);
-
-      sendBroadcast(intent);
     } else {
-      // Otherwise, it's not a Bean so ignore it...
+      Log.e(TAG, "I don't know this bean, did you enter the correct MAC?");
     }
   }
+
+  /**
+   * Disconnects all devices.
+   */
+  private void disconnectAllDevices() {
+    Iterator it = beans.entrySet().iterator();
+    while (it.hasNext()) {
+      Map.Entry pair = (Map.Entry) it.next();
+      Bean bean = (Bean) pair.getValue();
+      bean.disconnect();
+      it.remove();
+    }
+  }
+
+  /**
+   * This is used for discovering beans.
+   */
+  private BeanDiscoveryListener beanDiscoveryListener = new BeanDiscoveryListener() {
+    @Override
+    public void onBeanDiscovered(Bean bean) {
+      Log.d(TAG, bean.getDevice().getName() + " - " + bean.getDevice().getAddress());
+    }
+
+    @Override
+    public void onDiscoveryComplete() {
+      if (DEBUG) {
+        Log.d(TAG, "Bean scan complete!");
+      }
+    }
+  };
 
   /**
    * This is how other components of the app communicate with me
@@ -266,29 +308,77 @@ public class BeanService extends Service {
       String target = intent.getStringExtra(MvdHelper.EXTRA_TARGET);
       String sender = intent.getStringExtra(MvdHelper.EXTRA_SENDER);
 
-      String code = intent.getStringExtra(MvdHelper.EXTRA_CODE);
-      String pin = intent.getStringExtra(MvdHelper.EXTRA_PIN);
-      String value = intent.getStringExtra(MvdHelper.EXTRA_VALUE);
+      CodePinValue codePinValue = null;
 
-      Log.d(TAG, "TARGET: " + target);
-      Log.d(TAG, "SENDER: " + sender);
-      Log.d(TAG, "code: " + code);
-      Log.d(TAG, "pin: " + pin);
-      Log.d(TAG, "value: " + value);
+      // If we're getting the primitives...
+      if (intent.hasExtra(MvdHelper.EXTRA_CODE) &&
+          intent.hasExtra(MvdHelper.EXTRA_PIN) &&
+          intent.hasExtra(MvdHelper.EXTRA_VALUE)) {
+        String code = intent.getStringExtra(MvdHelper.EXTRA_CODE);
+        String pin = intent.getStringExtra(MvdHelper.EXTRA_PIN);
+        String value = intent.getStringExtra(MvdHelper.EXTRA_VALUE);
 
-      // If we're getting values from another service
-      if (action.equals(MvdHelper.ACTION_UP) && !sender.equals(TAG)) {
-        // TODO
+        codePinValue = new CodePinValue(code, pin, value);
       }
 
-      // Or if we've getting values from the "cloud" services
-      else if (action.equals(MvdHelper.ACTION_DOWN) && !sender.equals(TAG)) {
-        // TODO
+      // ... or if we're getting the serializable
+      else if (intent.hasExtra(MvdHelper.EXTRA_CODE_PIN_VALUE)) {
+        codePinValue = (CodePinValue) intent.getSerializableExtra(MvdHelper.EXTRA_CODE_PIN_VALUE);
+      }
+
+      // Make sure we've got a valid key-value set.
+      if (codePinValue != null) {
+
+        if (DEBUG) {
+          Log.d(TAG, codePinValue.toString());
+        }
+
+        if (!sender.equals(TAG)) {
+          // BeanService ALWAYS requires other services to pass the MAC too!
+          if (!intent.hasExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC)) {
+            Log.e(TAG, "The BeanService requires the MAC to be set!");
+
+            return;
+          }
+
+          // Get the mac!
+          String mac = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC);
+
+
+          // If we're getting values from the Bean service (UP direction)
+          if (action.equals(MvdHelper.ACTION_UP)) {
+            // Make sure the value is intended for us
+            if (target.equals(TAG)) {
+              sendToBean(mac, codePinValue.getCode(), codePinValue.getPin(), codePinValue.getValue());
+
+              lastCodePinValue = codePinValue;
+            }
+          }
+
+          // Or if we've getting values from other "cloud" services (DOWN direction) we should write to Bean too
+          else if (action.equals(MvdHelper.ACTION_DOWN)) {
+            // Make sure the value is intended for us
+            if (target.equals(TAG)) {
+              sendToBean(mac, codePinValue.getCode(), codePinValue.getPin(), codePinValue.getValue());
+
+              lastCodePinValue = codePinValue;
+            }
+          }
+        } else {
+          // Do nothing, this was myself broadcasting values
+          if (DEBUG) {
+            Log.d(TAG, "I just forwarded a value to another service (" + target + ")");
+          }
+        }
       }
 
       // If someone told me to kill myself...
       if (action.equals(MvdHelper.ACTION_KILL) && target.equals(TAG)) {
-        // TODO: Kill all bluetooth connections
+        // TODO: Remove all beans form the serivce
+
+        // TODO: Release all listeners
+
+        // TODO: Kill the BT connection
 
         unregisterReceiver(broadcastReceiver);
 
@@ -300,7 +390,199 @@ public class BeanService extends Service {
         scanDevices(true);
       }
 
+      // BT state changed
+      if (action.equals(BluetoothAdapter.ACTION_STATE_CHANGED)) {
+        Log.d(TAG, "Bluetooth adapter state change");
+      }
+
+      if (action.equals(MvdServiceReceiver.ACTION_ADD_BEAN)) {
+
+        if (!intent.hasExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC)) {
+          Log.e(TAG, "Need to give a MAC address to add a new Bean.");
+        } else {
+          String mac = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC);
+
+          if (!BluetoothAdapter.checkBluetoothAddress(mac)) {
+            Log.e(TAG, "This is not a valid MAC address.");
+          } else {
+            // Connect to device
+            connectToDevice(mac);
+          }
+        }
+      }
+
+      if (action.equals(MvdServiceReceiver.ACTION_REMOVE_BEAN)) {
+        if (!intent.hasExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC)) {
+          Log.e(TAG, "I need a MAC, otherwise I won't know which Bean to remove.");
+        } else {
+          String mac = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_MAC);
+
+          if (!BluetoothAdapter.checkBluetoothAddress(mac)) {
+            Log.e(TAG, "This is not a valid MAC address.");
+          } else {
+            // Make sure the MAC is known
+            if (!beans.containsKey(mac)) {
+              Log.e(TAG, "I don't know this MAC, please try again.");
+            } else {
+              disconnectDevice(mac);
+            }
+          }
+        }
+      }
+
     }
   };
 
+  /**
+   * This will send a value to the correct bean.
+   * <p/>
+   * TODO: Read the bean gatt from the hashmap. Maybe add more arguments?
+   *
+   * @param code
+   * @param pin
+   * @param value
+   */
+  private void sendToBean(String mac, String code, String pin, String value) {
+    String message = code + "/" + pin + "/" + value + "\n"; // Always send newline!
+
+    if (DEBUG) {
+      Log.d(TAG, message);
+    }
+
+    if (beans.containsKey(mac)) {
+      Bean b = beans.get(mac);
+      b.sendSerialMessage(message);
+    } else {
+      if (DEBUG) {
+        Log.d(TAG, "Bean with address [" + mac + "] was not found.");
+      }
+    }
+  }
+
+  /**
+   * This will handle the key-val from Bean's. Basically it determines if I should send a DOWN
+   * broadcast or not depending on the last value I wrote UP.
+   *
+   * @param codePinValue
+   */
+  private void handleKeyValFromBean(CodePinValue codePinValue) {
+    // First read, just store the last values.
+    if (lastCodePinValue == null) {
+      if (DEBUG) {
+        Log.d(TAG, "First read.");
+        Log.d(TAG, codePinValue.toString());
+      }
+
+      lastCodePinValue = codePinValue;
+    }
+
+    // Someone else changed the values in the cloud, I should react to it!
+    else if (!lastCodePinValue.equals(codePinValue)) {
+      if (DEBUG) {
+        Log.d(TAG, "I got the following from Bean:");
+        Log.d(TAG, codePinValue.toString());
+      }
+
+      // This was not me editing, I'll go ahead and broadcast the value "down" to other services
+      // (The value is from "me", but it was edited by someone else in Firebase so I'll mask it as "me"
+      String source = TAG;
+
+      // Find a forwarding where I am included
+      List<ServiceRoute> routes = ServiceRoute.find(ServiceRoute.class, "service1 = ? OR service2 = ?", TAG, TAG);
+      for (ServiceRoute route : routes) {
+        if (DEBUG) {
+          Log.d(TAG, "Found route! " + route.getService1() + "-" + route.getService2());
+        }
+
+        // Get the target
+        String target = MvdHelper.getServiceTarget(route, TAG);
+
+        // Send the broadcast
+        MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
+      }
+
+      // Find a forwarding where I am included
+      List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
+      for (Binding binding : bindings) {
+        if (DEBUG) {
+          Log.d(TAG, "Found binding for " + binding.getCode() + "/" + binding.getPin() + " to " + binding.getService());
+        }
+
+        // Get the target (For bindings this is always the BeanService in the DOWN direction)
+        String target = BeanService.class.getSimpleName();
+
+        // Send the broadcast
+        MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
+      }
+    }
+
+    // I wrote these changes, I shouldn't care about informing anyone else
+    else {
+      // Do nothing
+    }
+  }
+
+  /**
+   * MVD implementation for the BeanListener. We need this because we want to be able of attaching
+   * new listeners to all new beans. We could of course reuse the same listener for all beans...meh
+   */
+  private class MvdBeanListener implements BeanListener {
+
+    private String mac;
+
+    private MvdBeanListener(String mac) {
+      this.mac = mac;
+    }
+
+    @Override
+    public void onConnected() {
+      Log.d(TAG, "Connected to a bean!");
+    }
+
+    @Override
+    public void onConnectionFailed() {
+      Log.e(TAG, "Connection failed!");
+    }
+
+    @Override
+    public void onDisconnected() {
+      if (DEBUG) {
+        Log.d(TAG, "Disconnected from a bean!");
+      }
+    }
+
+    @Override
+    public void onSerialMessageReceived(byte[] bytes) {
+      String msg = new String(bytes);
+
+      if (DEBUG) {
+        Log.d(TAG, "read [" + msg + "] from Bean");
+      }
+
+      CodePinValue codePinValue = parseBeanMessage(msg);
+
+      if (codePinValue != null) {
+        handleKeyValFromBean(codePinValue);
+      }
+    }
+
+    @Override
+    public void onScratchValueChanged(int i, byte[] bytes) {
+      // TODO: What is a "scratch" value?
+    }
+  }
+
+  private CodePinValue parseBeanMessage(String msg) {
+    String[] parts = msg.split("/");
+
+    if (parts == null || parts.length <= 1) {
+      parts = msg.split(":");
+
+      if (parts == null || parts.length <= 1) {
+        return new CodePinValue(parts[0], parts[1], parts[2]);
+      }
+    }
+
+    return null;
+  }
 }

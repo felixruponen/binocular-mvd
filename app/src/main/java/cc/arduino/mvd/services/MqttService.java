@@ -24,18 +24,20 @@ import android.content.IntentFilter;
 import android.os.IBinder;
 import android.util.Log;
 
-import org.apache.http.message.BasicNameValuePair;
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
+import org.fusesource.hawtbuf.Buffer;
+import org.fusesource.hawtbuf.UTF8Buffer;
+import org.fusesource.mqtt.client.Callback;
+import org.fusesource.mqtt.client.CallbackConnection;
+import org.fusesource.mqtt.client.Listener;
+import org.fusesource.mqtt.client.MQTT;
+import org.fusesource.mqtt.client.QoS;
+import org.fusesource.mqtt.client.Topic;
 
-import java.net.URI;
-import java.util.ArrayList;
+import java.net.URISyntaxException;
 import java.util.List;
 
 import cc.arduino.mvd.MvdHelper;
 import cc.arduino.mvd.MvdServiceReceiver;
-import cc.arduino.mvd.libs.WebSocketClient;
 import cc.arduino.mvd.models.Binding;
 import cc.arduino.mvd.models.CodePinValue;
 import cc.arduino.mvd.models.ServiceRoute;
@@ -43,22 +45,31 @@ import cc.arduino.mvd.models.ServiceRoute;
 import static cc.arduino.mvd.MvdHelper.DEBUG;
 
 /**
- * This is the Elis integration of MVD. This is using WebSockets to send and receive messages to and
- * from the Elis "service".
+ * This is the MQTT integration of MVD. It uses unsecured MQTT to read and write values to a selected
+ * MQTT broker. It will publish a value as a string (in byte[]) to the topic pattern:
+ * <p/>
+ * Topic: component/code/pin
+ * Example: "component/L/13", or "component/T/12"
+ * <p/>
+ * It will automatically subscribe to all component topics: "component/#"
+ * <p/>
+ * Recommended test broker is "iot.eclipse.org" on port 1883
  *
- * @author Andreas Goransson, 2015-04-08
+ * @author Andreas Goransson, 2015-03-26
  */
-public class ElisService extends Service {
+public class MqttService extends Service {
 
-  public static final String TAG = ElisService.class.getSimpleName();
+  public static final String TAG = MqttService.class.getSimpleName();
 
-  private String url = null;
+  private String host;
 
-  private int port = 11414;
+  private int port;
 
-  private WebSocketClient webSocketClient;
+  private MQTT mqtt;
 
   private boolean started = false;
+
+  private CallbackConnection connection;
 
   private CodePinValue lastCodePinValue = null;
 
@@ -76,22 +87,30 @@ public class ElisService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
-
     if (!started) {
+      host = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_URL);
+      port = intent.getIntExtra(MvdServiceReceiver.EXTRA_SERVICE_PORT, 1883);
 
-      url = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_URL);
+      mqtt = new MQTT();
 
-      port = intent.getIntExtra(MvdServiceReceiver.EXTRA_SERVICE_PORT, 11414);
+      try {
+        mqtt.setHost(host, port);
 
-      List<BasicNameValuePair> extraHeaders = new ArrayList<>();
+        mqtt.setClientId(MvdHelper.getMvdId(getApplicationContext()));
 
-      URI uri = URI.create(url + ":" + port);
+        connection = mqtt.callbackConnection();
 
-      webSocketClient = new WebSocketClient(uri, webSocketListener, extraHeaders);
+        connection.listener(mqttListener);
 
-      webSocketClient.connect();
+        connection.connect(mqttCallback);
 
-      started = true;
+        started = true;
+
+      } catch (URISyntaxException e) {
+        e.printStackTrace();
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
 
       if (DEBUG) {
         Log.d(TAG, TAG + " started.");
@@ -107,103 +126,25 @@ public class ElisService extends Service {
 
     unregisterReceiver(broadcastReceiver);
 
-    webSocketClient.disconnect();
+    // To disconnect..
+    connection.disconnect(new Callback<Void>() {
+      public void onSuccess(Void v) {
+        // called once the connection is disconnected.
+      }
+
+      public void onFailure(Throwable value) {
+        // Disconnects never fail.
+      }
+    });
 
     if (DEBUG) {
       Log.d(TAG, TAG + " stopped.");
     }
   }
 
-
   @Override
   public IBinder onBind(Intent intent) {
     throw new UnsupportedOperationException("Not yet implemented");
-  }
-
-  private WebSocketClient.Listener webSocketListener = new WebSocketClient.Listener() {
-    @Override
-    public void onConnect() {
-      if (DEBUG) {
-        Log.d(TAG, "Connected to " + url + ":" + port);
-      }
-
-      try {
-        registerBindings();
-      } catch (JSONException e) {
-        e.printStackTrace();
-      }
-    }
-
-    @Override
-    public void onMessage(String message) {
-      parseElisMessage(message);
-    }
-
-    @Override
-    public void onMessage(byte[] data) {
-      String message = new String(data);
-      parseElisMessage(message);
-    }
-
-    @Override
-    public void onDisconnect(int code, String reason) {
-      if (DEBUG) {
-        Log.d(TAG, "Disconnected from " + url + ":" + port);
-      }
-    }
-
-    @Override
-    public void onError(Exception error) {
-      if (DEBUG) {
-        Log.e(TAG, error.getMessage());
-      }
-    }
-  };
-
-  /**
-   * Handle incoming messages, these should be in one of two formats.
-   * <p/>
-   * GET: code:pin
-   * or
-   * SET: code:pin:value
-   *
-   * @param message
-   */
-  private void parseElisMessage(String message) {
-    String[] parts = message.split(":");
-    if (parts != null) {
-      if (parts.length == 2) {
-        // GET... do nothing, I'll just keep publishing values just like other services
-      } else if (parts.length == 3) {
-        // SET... pass the value down to connected services
-        String code = parts[0];
-        String pin = parts[1];
-        String val = parts[2];
-
-        handleKeyValFromElis(code, pin, val);
-      }
-    }
-  }
-
-  /**
-   * This just sends all bindings for the Elis service as a register message to Elis
-   */
-  private void registerBindings() throws JSONException {
-    JSONArray register = new JSONArray();
-    List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
-    for (Binding binding : bindings) {
-      JSONObject jsonBinding = new JSONObject();
-      jsonBinding.put("name", binding.getName());
-      jsonBinding.put("code", binding.getCode());
-      jsonBinding.put("pin", binding.getPin());
-      register.put(jsonBinding);
-    }
-
-    JSONObject message = new JSONObject();
-    message.put("id", MvdHelper.getMvdId(getApplicationContext()));
-    message.put("register", register);
-
-    webSocketClient.send(message.toString());
   }
 
   /**
@@ -214,7 +155,7 @@ public class ElisService extends Service {
    * @param pin
    * @param value
    */
-  private void handleKeyValFromElis(String code, String pin, String value) {
+  private void handleKeyValFromMqtt(String code, String pin, String value) {
     CodePinValue codePinValue = new CodePinValue(code, pin, value);
 
     // First read, just store the last values.
@@ -230,12 +171,11 @@ public class ElisService extends Service {
     // Someone else changed the values in the cloud, I should react to it!
     else if (!lastCodePinValue.equals(codePinValue)) {
       if (DEBUG) {
-        Log.d(TAG, "I got the following from Elis:");
         Log.d(TAG, codePinValue.toString());
       }
 
       // This was not me editing, I'll go ahead and broadcast the value "down" to other services
-      // (The value is from "me", but it was edited by someone else in Elis so I'll mask it as "me"
+      // (The value is from "me", but it was edited by someone else in Xively so I'll mask it as "me"
       String source = TAG;
 
       // Find a forwarding where I am included
@@ -267,12 +207,6 @@ public class ElisService extends Service {
         // Send the broadcast
         MvdHelper.sendBeanDownBroadcast(getApplicationContext(), source, target, mac, codePinValue);
       }
-
-      try {
-        sendElisResponseValueSet(code, pin, value);
-      } catch (JSONException e) {
-        e.printStackTrace();
-      }
     }
 
     // I wrote these changes, I shouldn't care about informing anyone else
@@ -281,45 +215,90 @@ public class ElisService extends Service {
     }
   }
 
-  /**
-   * Send a Elis response to a SET request.
-   *
-   * @param code
-   * @param pin
-   * @param value
-   */
-  private void sendElisResponseValueSet(String code, String pin, String value) throws JSONException {
-    JSONObject response = new JSONObject();
-    response.put("code", code);
-    response.put("pin", pin);
-    response.put("value", value);
+  private void publish(String code, String pin, String value) {
+    final String topic = "component/" + code + "/" + pin;
 
-    JSONObject message = new JSONObject();
-    message.put("id", MvdHelper.getMvdId(getApplicationContext()));
-    message.put("response", response);
+//    try {
+//      connection.publish(topic, value.getBytes(), QoS.AT_MOST_ONCE, false);
+//
+//      lastChangedCode = code;
+//      lastChangedPin = pin;
+//      lastChangedValue = value;
+//    } catch (Exception e) {
+//      e.printStackTrace();
+//    }
 
-    webSocketClient.send(message.toString());
+    // Send a message to a topic
+    connection.publish(topic, value.getBytes(), QoS.AT_MOST_ONCE, false, new Callback<Void>() {
+      public void onSuccess(Void v) {
+        // the pubish operation completed successfully.
+        if (DEBUG) {
+          Log.d(TAG, "Successfully published message to: " + topic);
+        }
+      }
+
+      public void onFailure(Throwable value) {
+//          connection.close(null); // publish failed.
+        if (DEBUG) {
+          Log.e(TAG, "Failed published message");
+        }
+      }
+    });
   }
 
-  /**
-   * Send a Elis response to a GET request.
-   *
-   * @param code
-   * @param pin
-   * @param value
-   */
-  private void sendElisResponseValueGet(String code, String pin, String value) throws JSONException {
-    JSONObject response = new JSONObject();
-    response.put("code", code);
-    response.put("pin", pin);
-    response.put("value", value);
+  private Listener mqttListener = new Listener() {
+    @Override
+    public void onConnected() {
 
-    JSONObject message = new JSONObject();
-    message.put("id", MvdHelper.getMvdId(getApplicationContext()));
-    message.put("response", response);
+    }
 
-    webSocketClient.send(message.toString());
-  }
+    @Override
+    public void onDisconnected() {
+
+    }
+
+    @Override
+    public void onPublish(UTF8Buffer utf8Buffer, Buffer buffer, Runnable ack) {
+      // You can now process a received message from a topic.
+
+      // TODO
+      String s = new String(utf8Buffer.getData());
+      Log.d(TAG, "found: " + s);
+      // Once process execute the ack runnable.
+      ack.run();
+    }
+
+    @Override
+    public void onFailure(Throwable throwable) {
+
+    }
+  };
+
+  private Callback<Void> mqttCallback = new Callback<Void>() {
+    @Override
+    public void onSuccess(Void aVoid) {
+
+      // Subscribe to a topic
+      Topic topic = new Topic("component/#", QoS.AT_MOST_ONCE);
+      Topic[] topics = new Topic[]{topic};
+
+      connection.subscribe(topics, new Callback<byte[]>() {
+        public void onSuccess(byte[] qoses) {
+          // The result of the subscribe request.
+        }
+
+        public void onFailure(Throwable value) {
+//          connection.close(); // subscribe failed.
+        }
+      });
+    }
+
+    @Override
+    public void onFailure(Throwable value) {
+//      result.failure(value); // If we could not connect to the server.
+    }
+  };
+
 
   /**
    * This is how other components of the app communicate with me
@@ -355,6 +334,8 @@ public class ElisService extends Service {
       if (codePinValue != null) {
 
         if (DEBUG) {
+          Log.d(TAG, "TARGET: " + target);
+          Log.d(TAG, "SENDER: " + sender);
           Log.d(TAG, codePinValue.toString());
         }
 
@@ -363,11 +344,7 @@ public class ElisService extends Service {
           if (action.equals(MvdHelper.ACTION_UP)) {
             // Make sure the value is intended for us
             if (target.equals(TAG)) {
-              try {
-                sendElisResponseValueGet(codePinValue.getCode(), codePinValue.getPin(), codePinValue.getValue());
-              } catch (JSONException e) {
-                e.printStackTrace();
-              }
+              publish(codePinValue.getCode(), codePinValue.getPin(), codePinValue.getValue());
 
               lastCodePinValue = codePinValue;
             }
@@ -377,11 +354,7 @@ public class ElisService extends Service {
           else if (action.equals(MvdHelper.ACTION_DOWN)) {
             // Make sure the value is intended for us
             if (target.equals(TAG)) {
-              try {
-                sendElisResponseValueGet(codePinValue.getCode(), codePinValue.getPin(), codePinValue.getValue());
-              } catch (JSONException e) {
-                e.printStackTrace();
-              }
+              publish(codePinValue.getCode(), codePinValue.getPin(), codePinValue.getValue());
 
               lastCodePinValue = codePinValue;
             }
@@ -396,13 +369,46 @@ public class ElisService extends Service {
 
       // If someone told me to kill myself...
       if (action.equals(MvdHelper.ACTION_KILL) && target.equals(TAG)) {
-        webSocketClient.disconnect();
+        try {
+          connection.disconnect(new Callback<Void>() {
+            @Override
+            public void onSuccess(Void aVoid) {
+              if (DEBUG) {
+                Log.d(TAG, "Disconnected from MQTT broker.");
+              }
+            }
+
+            @Override
+            public void onFailure(Throwable throwable) {
+              if (DEBUG) {
+                Log.d(TAG, "Failed to disconnect from MQTT broker.");
+              }
+            }
+          });
+
+          connection.kill(new Callback<Void>() {
+            @Override
+            public void onSuccess(Void aVoid) {
+              if (DEBUG) {
+                Log.d(TAG, "Killed MQTT service.");
+              }
+            }
+
+            @Override
+            public void onFailure(Throwable throwable) {
+              if (DEBUG) {
+                Log.d(TAG, "Failed to kill MQTT service.");
+              }
+            }
+          });
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
 
         unregisterReceiver(broadcastReceiver);
 
         stopSelf();
       }
-
 
     }
   };

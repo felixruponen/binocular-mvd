@@ -29,11 +29,15 @@ import java.util.concurrent.TimeUnit;
 import cc.arduino.mvd.MvdHelper;
 import cc.arduino.mvd.MvdServiceReceiver;
 import cc.arduino.mvd.models.Binding;
+import cc.arduino.mvd.models.CodePinValue;
+import cc.arduino.mvd.models.ServiceRoute;
+
+import static cc.arduino.mvd.MvdHelper.DEBUG;
 
 /**
  * This is the http integration of MVD.
  *
- * @author Andreas Goransson
+ * @author Andreas Goransson, 2015-03-19
  */
 public class HttpService extends Service {
 
@@ -51,10 +55,11 @@ public class HttpService extends Service {
 
   private boolean started = false;
 
+  private CodePinValue lastCodePinValue = null;
+
   @Override
   public void onCreate() {
     super.onCreate();
-    Log.d(TAG, "Starting HTTP");
 
     IntentFilter filter = new IntentFilter();
     filter.addAction(MvdHelper.ACTION_UP);
@@ -70,14 +75,36 @@ public class HttpService extends Service {
     if (!started) {
       url = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_URL);
 
+      // Make sure the url ends with a slash
+      if (!url.endsWith("/")) {
+        url = url + "/";
+      }
+
       delay = intent.getIntExtra(MvdServiceReceiver.EXTRA_SERVICE_DELAY, 5000);
 
       startGetRequests(delay);
 
       started = true;
+
+      if (DEBUG) {
+        Log.d(TAG, TAG + " started.");
+      }
     }
 
     return START_STICKY;
+  }
+
+  @Override
+  public void onDestroy() {
+    super.onDestroy();
+
+    unregisterReceiver(broadcastReceiver);
+
+    stopGetRequests();
+
+    if (DEBUG) {
+      Log.d(TAG, TAG + " stopped.");
+    }
   }
 
   /**
@@ -89,7 +116,17 @@ public class HttpService extends Service {
     Runnable task = new Runnable() {
       @Override
       public void run() {
-        List<Binding> bindings = Binding.getAllBindings(TAG);
+//        List<ServiceRoute> routes = ServiceRoute.find(ServiceRoute.class, "service1 = ? OR service2 = ?", TAG);
+//        for (ServiceRoute route : routes) {
+//          TODO: Find a solution to use service routes in HTTP GET's... probably need to locally store all details...
+//          try {
+//            get(url, "components/" + route.g)
+//          } catch (IOException e) {
+//            e.printStackTrace();
+//          }
+//        }
+
+        List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
         for (Binding binding : bindings) {
           try {
             get(url + "components/" + binding.code + "/pins/" + binding.pin);
@@ -115,18 +152,6 @@ public class HttpService extends Service {
     scheduledFuture.cancel(true);
   }
 
-
-  @Override
-  public void onDestroy() {
-    super.onDestroy();
-
-    Log.d(TAG, "Killing httpservice");
-
-    unregisterReceiver(broadcastReceiver);
-
-    stopGetRequests();
-  }
-
   @Override
   public IBinder onBind(Intent intent) {
     throw new UnsupportedOperationException("Not yet implemented");
@@ -141,8 +166,64 @@ public class HttpService extends Service {
    * @param value
    */
   private void handleKeyValFromHttp(String code, String pin, String value) {
-    String target = "BluetoothService";
-    MvdHelper.sendDownBroadcast(getApplicationContext(), TAG, target, code, pin, value);
+    CodePinValue codePinValue = new CodePinValue(code, pin, value);
+
+    // First read, just store the last values.
+    if (lastCodePinValue == null) {
+      if (DEBUG) {
+        Log.d(TAG, "First read.");
+        Log.d(TAG, codePinValue.toString());
+      }
+
+      lastCodePinValue = codePinValue;
+    }
+
+    // Someone else changed the values in the cloud, I should react to it!
+    else if (!lastCodePinValue.equals(codePinValue)) {
+      if (DEBUG) {
+        Log.d(TAG, "I got the following from Firebase:");
+        Log.d(TAG, codePinValue.toString());
+      }
+
+      // This was not me editing, I'll go ahead and broadcast the value "down" to other services
+      // (The value is from "me", but it was edited by someone else in Firebase so I'll mask it as "me"
+      String source = TAG;
+
+      // Find a forwarding where I am included
+      List<ServiceRoute> routes = ServiceRoute.find(ServiceRoute.class, "service1 = ? OR service2 = ?", TAG, TAG);
+      for (ServiceRoute route : routes) {
+        if (DEBUG) {
+          Log.d(TAG, "Found route! " + route.getService1() + "-" + route.getService2());
+        }
+
+        // Get the target
+        String target = MvdHelper.getServiceTarget(route, TAG);
+
+        // Send the broadcast
+        MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
+      }
+
+      // Find a forwarding where I am included
+      List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
+      for (Binding binding : bindings) {
+        if (DEBUG) {
+          Log.d(TAG, "Found binding for " + binding.getCode() + "/" + binding.getPin() + " to " + binding.getService());
+        }
+
+        // Get the target (For bindings this is always the BeanService in the DOWN direction)
+        String target = BeanService.class.getSimpleName();
+
+        String mac = binding.getMac();
+
+        // Send the broadcast
+        MvdHelper.sendBeanDownBroadcast(getApplicationContext(), source, target, mac, codePinValue);
+      }
+    }
+
+    // I wrote these changes, I shouldn't care about informing anyone else
+    else {
+      // Do nothing
+    }
   }
 
   /**
@@ -157,6 +238,8 @@ public class HttpService extends Service {
     MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     RequestBody body = RequestBody.create(JSON, json);
+
+    Log.d(TAG, "POST: " + url);
 
     final Request request = new Request.Builder()
         .url(url)
@@ -206,9 +289,6 @@ public class HttpService extends Service {
 
       @Override
       public void onResponse(final Response response) throws IOException {
-        // Meh, don't do anything...
-        Log.d(TAG, request.toString());
-
         try {
           String body = new String(response.body().bytes());
           JSONObject json = new JSONObject(body);
@@ -220,6 +300,7 @@ public class HttpService extends Service {
       }
     });
   }
+
 
   /**
    * This is how other components of the app communicate with me
@@ -233,51 +314,83 @@ public class HttpService extends Service {
       String target = intent.getStringExtra(MvdHelper.EXTRA_TARGET);
       String sender = intent.getStringExtra(MvdHelper.EXTRA_SENDER);
 
-      String code = intent.getStringExtra(MvdHelper.EXTRA_CODE);
-      String pin = intent.getStringExtra(MvdHelper.EXTRA_PIN);
-      String value = intent.getStringExtra(MvdHelper.EXTRA_VALUE);
+      CodePinValue codePinValue = null;
 
-      Log.d(TAG, "TARGET: " + target);
-      Log.d(TAG, "SENDER: " + sender);
-      Log.d(TAG, "code: " + code);
-      Log.d(TAG, "pin: " + pin);
-      Log.d(TAG, "value: " + value);
+      // If we're getting the primitives...
+      if (intent.hasExtra(MvdHelper.EXTRA_CODE) &&
+          intent.hasExtra(MvdHelper.EXTRA_PIN) &&
+          intent.hasExtra(MvdHelper.EXTRA_VALUE)) {
+        String code = intent.getStringExtra(MvdHelper.EXTRA_CODE);
+        String pin = intent.getStringExtra(MvdHelper.EXTRA_PIN);
+        String value = intent.getStringExtra(MvdHelper.EXTRA_VALUE);
 
-      if (!sender.equals(TAG)) {
-        // If we're getting values from another service
-        if (action.equals(MvdHelper.ACTION_UP)) {
-          if (target.equals(TAG)) {
-            try {
-              JSONObject json = new JSONObject();
-              json.put("value", value);
+        codePinValue = new CodePinValue(code, pin, value);
+      }
 
-              post(url + "components/" + code + "/pins/" + pin, json.toString());
-            } catch (JSONException e) {
-              e.printStackTrace();
-            }
-          }
+      // ... or if we're getting the serializable
+      else if (intent.hasExtra(MvdHelper.EXTRA_CODE_PIN_VALUE)) {
+        codePinValue = (CodePinValue) intent.getSerializableExtra(MvdHelper.EXTRA_CODE_PIN_VALUE);
+      }
+
+      // Make sure we've got a valid key-value set.
+      if (codePinValue != null) {
+
+        if (DEBUG) {
+          Log.d(TAG, codePinValue.toString());
         }
 
-        // Or if we've getting values from the "cloud" services
-        else if (action.equals(MvdHelper.ACTION_DOWN)) {
-          if (target.equals(TAG)) {
-            try {
-              JSONObject json = new JSONObject();
-              json.put("value", value);
+        if (!sender.equals(TAG)) {
+          // If we're getting values from the Bean service (UP direction)
+          if (action.equals(MvdHelper.ACTION_UP)) {
+            // Make sure the value is intended for us
+            if (target.equals(TAG)) {
+              try {
+                JSONObject json = new JSONObject();
+                json.put("value", codePinValue.getValue());
 
-              post(url + "components/" + code + "/pins/" + pin, json.toString());
-            } catch (JSONException e) {
-              e.printStackTrace();
+                post(url + "components/" + codePinValue.getCode() + "/pins/" + codePinValue.getPin(), json.toString());
+
+                lastCodePinValue = codePinValue;
+
+              } catch (JSONException e) {
+                e.printStackTrace();
+              }
+
+              lastCodePinValue = codePinValue;
             }
           }
+
+          // Or if we've getting values from other "cloud" services (DOWN direction) we should write to Firebase too
+          else if (action.equals(MvdHelper.ACTION_DOWN)) {
+            // Make sure the value is intended for us
+            if (target.equals(TAG)) {
+              try {
+                JSONObject json = new JSONObject();
+                json.put("value", codePinValue.getValue());
+
+                post(url + "components/" + codePinValue.getCode() + "/pins/" + codePinValue.getPin(), json.toString());
+
+                lastCodePinValue = codePinValue;
+
+              } catch (JSONException e) {
+                e.printStackTrace();
+              }
+
+              lastCodePinValue = codePinValue;
+            }
+          }
+        } else {
+          // Do nothing, this was myself broadcasting values
+          if (DEBUG) {
+            Log.d(TAG, "I just forwarded a value to another service (" + target + ")");
+          }
         }
-      } else {
-        // Do nothing, this was me broadcasting
       }
 
       // If someone told me to kill myself...
       if (action.equals(MvdHelper.ACTION_KILL) && target.equals(TAG)) {
-        // TODO: Remvoe listeners
+//        firebase.removeEventListener(childListener)
+        // TODO: remove the listner? (client. ... ?)
 
         unregisterReceiver(broadcastReceiver);
 

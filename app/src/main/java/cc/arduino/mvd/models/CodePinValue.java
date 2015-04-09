@@ -16,56 +16,23 @@
 
 package cc.arduino.mvd.models;
 
-import com.orm.SugarRecord;
+import java.io.Serializable;
 
 /**
- * @author Andreas Goransson, 2015-03-21
+ * @author Andreas Goransson, 2015-04-05
  */
-public class Binding extends SugarRecord<Binding> {
+public class CodePinValue implements Serializable {
 
-  public String mac;
+  private String code;
 
-  public String name;
+  private String pin;
 
-  public String service;
+  private String value;
 
-  public String code;
-
-  public String pin;
-
-  public Binding() {
-  }
-
-  public Binding(String mac, String name, String service, String code, String pin) {
-    this.mac = mac;
-    this.name = name;
-    this.service = service;
+  public CodePinValue(String code, String pin, String value) {
     this.code = code;
     this.pin = pin;
-  }
-
-  public String getMac() {
-    return mac;
-  }
-
-  public void setMac(String mac) {
-    this.mac = mac;
-  }
-
-  public String getName() {
-    return name;
-  }
-
-  public void setName(String name) {
-    this.name = name;
-  }
-
-  public String getService() {
-    return service;
-  }
-
-  public void setService(String service) {
-    this.service = service;
+    this.value = value;
   }
 
   public String getCode() {
@@ -84,8 +51,24 @@ public class Binding extends SugarRecord<Binding> {
     this.pin = pin;
   }
 
+  public String getValue() {
+    return value;
+  }
+
+  public void setValue(String value) {
+    this.value = value;
+  }
+
+  public boolean equals(CodePinValue codePinValue) {
+    return (codePinValue.getPin().equals(code) && codePinValue.getPin().equals(pin) && codePinValue.getValue().equals(value));
+  }
+
   @Override
   public String toString() {
-    return name + " : " + code + "/" + pin + " --> " + service;
+    return "CodePinValue{" +
+        "code='" + code + '\'' +
+        ", pin='" + pin + '\'' +
+        ", value='" + value + '\'' +
+        '}';
   }
 }
