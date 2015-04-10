@@ -36,6 +36,21 @@ To work with this application you need the Android Developer Tools installed. Yo
 3. Run `adb start-server`
 4. Run `adb devices`
 
+
+## Installing
+
+If you've only got one ADB device on your system:
+
+```
+adb -d install mvd-v.0.1.0.apk
+```
+
+If you've got more than one ADB device on your system:
+
+```
+adb -s MC000090 install mvd-v.0.1.0.apk
+```
+
 ## General description
 
 The MVD can be described, in a simple way, as a network proxy. It can connect to multiple services and pass information between them. The following diagram simplifies the position of the MVD in the network.
