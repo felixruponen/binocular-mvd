@@ -26,7 +26,11 @@ To work with this application you need the Android Developer Tools installed. Yo
 
 ### Linux
 
-** TODO **
+1. Run ​`echo 0x0a5c >> ~/.android/adb_usb.ini`
+2. Run `adb kill-server`
+3. Run `adb start-server`
+4. Run `adb devices`
+
 
 ### Mac
 
