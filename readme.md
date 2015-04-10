@@ -18,6 +18,24 @@ To work with this application you need the Android Developer Tools installed. Yo
 
 **Note: You do not need to install the Android Studio Development environment unless you intend on altering the MVD Android component setup.**
 
+## Getting the MVD to show up in ADB
+
+### Windows
+
+** TODO **
+
+### Linux
+
+** TODO **
+
+### Mac
+
+
+1. Run ​`echo 0x0a5c >> ~/.android/adb_usb.ini`
+2. Run `adb kill-server`
+3. Run `adb start-server`
+4. Run `adb devices`
+
 ## General description
 
 The MVD can be described, in a simple way, as a network proxy. It can connect to multiple services and pass information between them. The following diagram simplifies the position of the MVD in the network.

@@ -150,9 +150,9 @@ public class BeanService extends Service {
   }
 
   private void startPullRequests(int delay) {
-//    Runnable task = new Runnable() {
-//      @Override
-//      public void run() {
+    Runnable task = new Runnable() {
+      @Override
+      public void run() {
 //        Iterator it = beans.entrySet().iterator();
 //        while (it.hasNext()) {
 //          Map.Entry pair = (Map.Entry) it.next();
@@ -160,25 +160,33 @@ public class BeanService extends Service {
 //          Bean bean = (Bean) pair.getValue();
 //          sendPollMessage(bean);
 //        }
-//      }
-//    };
-//
-//    scheduledFuture = scheduler.scheduleAtFixedRate(
-//        task,
-//        delay,
-//        delay,
-//        TimeUnit.MILLISECONDS
-//    );
+
+        List<Binding> bindings = Binding.listAll(Binding.class);
+
+        for (Binding binding : bindings) {
+          Bean bean = beans.get(binding.getMac());
+
+          sendPollMessage(bean, binding);
+        }
+      }
+    };
+
+    scheduledFuture = scheduler.scheduleAtFixedRate(
+        task,
+        delay,
+        delay,
+        TimeUnit.MILLISECONDS
+    );
   }
 
   /**
    * This sends a polling notification to the bean, which will tell the bean to send values for all it's sensors.
    *
    * @param bean
+   * @param binding
    */
-  private void sendPollMessage(Bean bean) {
-    // TODO: Fix this polling message!
-    String msg = "asd" + "\n";
+  private void sendPollMessage(Bean bean, Binding binding) {
+    String msg = binding.getCode() + "/" + binding.getPin() + "\n";
 
     bean.sendSerialMessage(msg);
   }
