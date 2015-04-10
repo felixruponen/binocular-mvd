@@ -25,7 +25,7 @@ To work with this application you need the Android Developer Tools installed. Yo
 1. Copy the file "android_winusb.inf" in C:\PATH\TO\ANDRIOD\android-sdk\extras\google\usb_driver, overwriting the original one. 
 2. Follow the instructions described [here](http://www.makeuseof.com/tag/how-can-i-install-hardware-with-unsigned-drivers-in-windows-8/) to install unsigned driver in Windows 8.
 3. Navigate to C:\PATH\TO\ANDRIOD\android-sdk\extras\google\usb_driver.
-4. right-click on "android_winusb.inf" and click "Install".
+4. Right-click on "android_winusb.inf" and click "Install".
 5. Copy the file "adb_usb.ini" into C:\PATH\TO\USER\\.android, overwriting the original one as well.
 6. Launch cmd and navigate to C:\PATH\TO\ANDROID\android-sdk\platform-tools\ .
 7. Run `adb devices`
