@@ -91,6 +91,7 @@ public class BeanService extends Service {
     filter.addAction(MvdHelper.ACTION_SCAN);
     filter.addAction(MvdServiceReceiver.ACTION_ADD_BEAN);
     filter.addAction(MvdServiceReceiver.ACTION_REMOVE_BEAN);
+    filter.addAction(MvdServiceReceiver.ACTION_LIST_BEANS);
 
     filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
 
@@ -149,25 +150,25 @@ public class BeanService extends Service {
   }
 
   private void startPullRequests(int delay) {
-    Runnable task = new Runnable() {
-      @Override
-      public void run() {
-        Iterator it = beans.entrySet().iterator();
-        while (it.hasNext()) {
-          Map.Entry pair = (Map.Entry) it.next();
-
-          Bean bean = (Bean) pair.getValue();
-          sendPollMessage(bean);
-        }
-      }
-    };
-
-    scheduledFuture = scheduler.scheduleAtFixedRate(
-        task,
-        delay,
-        delay,
-        TimeUnit.MILLISECONDS
-    );
+//    Runnable task = new Runnable() {
+//      @Override
+//      public void run() {
+//        Iterator it = beans.entrySet().iterator();
+//        while (it.hasNext()) {
+//          Map.Entry pair = (Map.Entry) it.next();
+//
+//          Bean bean = (Bean) pair.getValue();
+//          sendPollMessage(bean);
+//        }
+//      }
+//    };
+//
+//    scheduledFuture = scheduler.scheduleAtFixedRate(
+//        task,
+//        delay,
+//        delay,
+//        TimeUnit.MILLISECONDS
+//    );
   }
 
   /**
@@ -232,7 +233,7 @@ public class BeanService extends Service {
       if (bean.getDevice().getAddress().equals(mac)) {
         bean.connect(getApplicationContext(), new MvdBeanListener(bean.getDevice().getAddress()));
 
-        beans.put("mac", bean);
+        beans.put(mac, bean);
 
         beanFound = true;
       }
@@ -374,11 +375,6 @@ public class BeanService extends Service {
 
       // If someone told me to kill myself...
       if (action.equals(MvdHelper.ACTION_KILL) && target.equals(TAG)) {
-        // TODO: Remove all beans form the serivce
-
-        // TODO: Release all listeners
-
-        // TODO: Kill the BT connection
 
         unregisterReceiver(broadcastReceiver);
 
@@ -430,13 +426,17 @@ public class BeanService extends Service {
         }
       }
 
+      if (action.equals(MvdServiceReceiver.ACTION_LIST_BEANS)) {
+        Log.d(TAG, "Listing connected beans:");
+        printAllConnectedBeans();
+        Log.d(TAG, "Done listing connected beans.");
+      }
     }
   };
 
   /**
    * This will send a value to the correct bean.
    * <p/>
-   * TODO: Read the bean gatt from the hashmap. Maybe add more arguments?
    *
    * @param code
    * @param pin
@@ -465,7 +465,7 @@ public class BeanService extends Service {
    *
    * @param codePinValue
    */
-  private void handleKeyValFromBean(CodePinValue codePinValue) {
+  private void handleKeyValFromBean(String mac, CodePinValue codePinValue) {
     // First read, just store the last values.
     if (lastCodePinValue == null) {
       if (DEBUG) {
@@ -498,7 +498,7 @@ public class BeanService extends Service {
         String target = MvdHelper.getServiceTarget(route, TAG);
 
         // Send the broadcast
-        MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
+        MvdHelper.sendBeanDownBroadcast(getApplicationContext(), source, target, mac, codePinValue);
       }
 
       // Find a forwarding where I am included
@@ -512,7 +512,7 @@ public class BeanService extends Service {
         String target = BeanService.class.getSimpleName();
 
         // Send the broadcast
-        MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
+        MvdHelper.sendBeanDownBroadcast(getApplicationContext(), source, target, mac, codePinValue);
       }
     }
 
@@ -556,13 +556,14 @@ public class BeanService extends Service {
       String msg = new String(bytes);
 
       if (DEBUG) {
-        Log.d(TAG, "read [" + msg + "] from Bean");
+        Log.d(TAG, "read [" + msg + "] from Bean with address [" + mac + "]");
       }
 
       CodePinValue codePinValue = parseBeanMessage(msg);
 
+
       if (codePinValue != null) {
-        handleKeyValFromBean(codePinValue);
+        handleKeyValFromBean(mac, codePinValue);
       }
     }
 
@@ -575,14 +576,27 @@ public class BeanService extends Service {
   private CodePinValue parseBeanMessage(String msg) {
     String[] parts = msg.split("/");
 
-    if (parts == null || parts.length <= 1) {
+    if (parts == null || parts.length < 3) {
       parts = msg.split(":");
 
-      if (parts == null || parts.length <= 1) {
+      if (parts == null || parts.length >= 3) {
         return new CodePinValue(parts[0], parts[1], parts[2]);
       }
     }
 
     return null;
+  }
+
+
+  private void printAllConnectedBeans() {
+    Iterator it = beans.entrySet().iterator();
+    while (it.hasNext()) {
+      Map.Entry pair = (Map.Entry) it.next();
+
+      String mac = (String) pair.getKey();
+      Bean bean = (Bean) pair.getValue();
+
+      Log.d(TAG, mac + " - " + bean.getDevice().getName());
+    }
   }
 }

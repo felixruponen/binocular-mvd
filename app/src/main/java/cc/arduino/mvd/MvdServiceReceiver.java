@@ -71,6 +71,7 @@ public class MvdServiceReceiver extends BroadcastReceiver {
 
   // Bean specific actions
   public static final String ACTION_ADD_BEAN = "cc.arduino.mvd.services.actions.ADD_BEAN";
+  public static final String ACTION_LIST_BEANS = "cc.arduino.mvd.services.actions.LIST_BEANS";
   public static final String ACTION_REMOVE_BEAN = "cc.arduino.mvd.services.actions.REMOVE_BEAN";
 
   @Override
