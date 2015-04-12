@@ -364,6 +364,7 @@ public class BeanService extends Service {
             }
           }
 
+
           // Or if we've getting values from other "cloud" services (DOWN direction) we should write to Bean too
           else if (action.equals(MvdHelper.ACTION_DOWN)) {
             // Make sure the value is intended for us
@@ -442,6 +443,7 @@ public class BeanService extends Service {
     }
   };
 
+
   /**
    * This will send a value to the correct bean.
    * <p/>
@@ -457,9 +459,28 @@ public class BeanService extends Service {
       Log.d(TAG, message);
     }
 
+
     if (beans.containsKey(mac)) {
-      Bean b = beans.get(mac);
-      b.sendSerialMessage(message);
+
+        Bean b = beans.get(mac);
+        try{
+            b.sendSerialMessage(message);
+        } catch(Exception e) {
+            e.printStackTrace();
+
+            // TODO: remove bindings, remove beans, scan, add beans
+
+            scanDevices(true);
+
+            try {
+                disconnectDevice(mac);
+            }catch(Exception e1) {
+                e1.printStackTrace();
+            }
+
+            connectToDevice(mac);
+        }
+
     } else {
       if (DEBUG) {
         Log.d(TAG, "Bean with address [" + mac + "] was not found.");
@@ -474,6 +495,9 @@ public class BeanService extends Service {
    * @param codePinValue
    */
   private void handleKeyValFromBean(String mac, CodePinValue codePinValue) {
+
+
+
     // First read, just store the last values.
     if (lastCodePinValue == null) {
       if (DEBUG) {
@@ -498,6 +522,7 @@ public class BeanService extends Service {
       // Find a forwarding where I am included
       List<ServiceRoute> routes = ServiceRoute.find(ServiceRoute.class, "service1 = ? OR service2 = ?", TAG, TAG);
       for (ServiceRoute route : routes) {
+
         if (DEBUG) {
           Log.d(TAG, "Found route! " + route.getService1() + "-" + route.getService2());
         }
@@ -573,6 +598,7 @@ public class BeanService extends Service {
       if (codePinValue != null) {
         handleKeyValFromBean(mac, codePinValue);
       }
+
     }
 
     @Override
@@ -584,13 +610,16 @@ public class BeanService extends Service {
   private CodePinValue parseBeanMessage(String msg) {
     String[] parts = msg.split("/");
 
-    if (parts == null || parts.length < 3) {
-      parts = msg.split(":");
+    if(parts.length == 3) {
+    //if (parts == null || parts.length < 3) {
+      //parts = msg.split(":");
 
-      if (parts == null || parts.length >= 3) {
+      //if (parts == null || parts.length >= 3) {
         return new CodePinValue(parts[0], parts[1], parts[2]);
-      }
+      //}
     }
+
+    Log.d(TAG, "Could not parse message");
 
     return null;
   }

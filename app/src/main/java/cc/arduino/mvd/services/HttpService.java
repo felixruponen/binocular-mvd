@@ -87,7 +87,7 @@ public class HttpService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
-
+      Log.i("ELEPHANT", "STARTING HTTPSERVICE");
     if (!started) {
       url = intent.getStringExtra(MvdServiceReceiver.EXTRA_SERVICE_URL);
 

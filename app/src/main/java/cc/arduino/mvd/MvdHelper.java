@@ -25,6 +25,7 @@ import android.util.Log;
 import cc.arduino.mvd.models.CodePinValue;
 import cc.arduino.mvd.models.ServiceRoute;
 import cc.arduino.mvd.services.BeanService;
+import cc.arduino.mvd.services.BinocularService;
 import cc.arduino.mvd.services.ElisService;
 import cc.arduino.mvd.services.FirebaseService;
 import cc.arduino.mvd.services.HttpService;
@@ -265,6 +266,11 @@ public class MvdHelper {
     // Http
     else if (service.equals(HttpService.class.getSimpleName())) {
       return true;
+    }
+
+    // Binocular
+    else if (service.equals(BinocularService.class.getSimpleName())) {
+        return true;
     }
 
     // MQTT

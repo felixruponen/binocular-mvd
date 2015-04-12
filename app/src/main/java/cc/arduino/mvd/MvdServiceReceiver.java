@@ -26,6 +26,7 @@ import java.util.List;
 import cc.arduino.mvd.models.Binding;
 import cc.arduino.mvd.models.ServiceRoute;
 import cc.arduino.mvd.services.BeanService;
+import cc.arduino.mvd.services.BinocularService;
 import cc.arduino.mvd.services.ElisService;
 import cc.arduino.mvd.services.FirebaseService;
 import cc.arduino.mvd.services.HttpService;
@@ -84,6 +85,11 @@ public class MvdServiceReceiver extends BroadcastReceiver {
 //      names = intent.getStringArrayExtra(EXTRA_SERVICE_NAMES);
 
     // A service was requested to start
+
+
+      Log.i("ELEPHANT", "Intent recieved!");
+
+
     if (action.equals(ACTION_START_SERVICE)) {
       String name = intent.getStringExtra(EXTRA_SERVICE_NAME);
 
@@ -145,6 +151,20 @@ public class MvdServiceReceiver extends BroadcastReceiver {
         http.putExtra(EXTRA_SERVICE_URL, url);
         http.putExtra(EXTRA_SERVICE_DELAY, delay);
         context.startService(http);
+      }
+
+      // Start BinocularService
+      else if (name.equals(BinocularService.class.getSimpleName())) {
+          String url = intent.getStringExtra(EXTRA_SERVICE_URL);
+          int delay = intent.getIntExtra(EXTRA_SERVICE_DELAY, 5000);
+
+          if (DEBUG) {
+              Log.d(TAG, "Starting Binocular service");
+          }
+          Intent binocular = new Intent(context, BinocularService.class);
+          binocular.putExtra(EXTRA_SERVICE_URL, url);
+          binocular.putExtra(EXTRA_SERVICE_DELAY, delay);
+          context.startService(binocular);
       }
 
       // Start MQTT
@@ -243,8 +263,10 @@ public class MvdServiceReceiver extends BroadcastReceiver {
         String bindingName = intent.getStringExtra(EXTRA_BINDING_NAME);
         String code = intent.getStringExtra(EXTRA_CODE);
         String pin = intent.getStringExtra(EXTRA_PIN);
+        String mac = intent.getStringExtra(EXTRA_SERVICE_MAC);
 
         Binding binding = new Binding();
+        binding.mac = mac;
         binding.name = bindingName;
         binding.service = service;
         binding.code = code;
@@ -322,7 +344,10 @@ public class MvdServiceReceiver extends BroadcastReceiver {
 
     // Add a service route
     else if (action.equals(ACTION_ADD_ROUTE)) {
-      String[] services = intent.getStringArrayExtra(EXTRA_SERVICE_NAMES);
+
+      String[] services = intent.getStringExtra(EXTRA_SERVICE_NAMES).split(",");
+
+      //String[] services = intent.getStringArrayExtra(EXTRA_SERVICE_NAMES);
 
       // Not enough services passed in the array
       if (services.length != 2) {
