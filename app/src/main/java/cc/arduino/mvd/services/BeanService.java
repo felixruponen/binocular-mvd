@@ -236,6 +236,7 @@ public class BeanService extends Service {
     }
 
     Collection<Bean> scannedBeans = BeanManager.getInstance().getBeans();
+
     boolean beanFound = false;
     for (Bean bean : scannedBeans) {
       if (bean.getDevice().getAddress().equals(mac)) {

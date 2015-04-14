@@ -160,15 +160,15 @@ public class BinocularService extends Service {
 //          }
 //        }
 
-                List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
-                for (final Binding binding : bindings) {
+                //List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
+                //for (final Binding binding : bindings) {
                         // TODO: Get device flags from binocular
                         Log.d(TAG, "Running binding");
 
                         try{
 
 
-                        final IJsonCollectionConvertable manager = CollectionFactory.build_state(binding.getCode(), null);
+                        final IJsonCollectionConvertable manager = CollectionFactory.build_state("5528e947d7ad015decb3af13", null);
 
                         if(manager != null) {
 
@@ -219,7 +219,7 @@ public class BinocularService extends Service {
                     }
 
                 }
-            }
+            //}
         };
 
         scheduledFuture = scheduler.scheduleAtFixedRate(
@@ -235,6 +235,7 @@ public class BinocularService extends Service {
      * Stop the recurring GET's
      */
     private void stopGetRequests() {
+        Log.d(TAG, "Stopping recurring requests");
         scheduledFuture.cancel(true);
     }
 
@@ -274,7 +275,7 @@ public class BinocularService extends Service {
             // This was not me editing, I'll go ahead and broadcast the value "down" to other services
             // (The value is from "me", but it was edited by someone else in Firebase so I'll mask it as "me"
             String source = TAG;
-
+            /*
             // Find a forwarding where I am included
             List<ServiceRoute> routes = ServiceRoute.find(ServiceRoute.class, "service1 = ? OR service2 = ?", TAG, TAG);
             for (ServiceRoute route : routes) {
@@ -287,7 +288,7 @@ public class BinocularService extends Service {
 
                 // Send the broadcast
                 MvdHelper.sendDownBroadcast(getApplicationContext(), source, target, codePinValue);
-            }
+            }*/
 
             // Find a forwarding where I am included
             List<Binding> bindings = Binding.find(Binding.class, "service = ?", TAG);
@@ -363,6 +364,8 @@ public class BinocularService extends Service {
                         // Make sure the value is intended for us
                         if (target.equals(TAG)) {
 
+
+                                Log.d(TAG, "TRYING TO UP DATA from: " + codePinValue.getCode());
                                 //post(url + "components/" + codePinValue.getCode() + "/pins/" + codePinValue.getPin(), json.toString());
 
 
@@ -373,6 +376,8 @@ public class BinocularService extends Service {
                     // Or if we've getting values from other "cloud" services (DOWN direction) we should write to Firebase too
                     else if (action.equals(MvdHelper.ACTION_DOWN)) {
                         // Make sure the value is intended for us
+                        Log.d(TAG, "TRYING TO DOWN DATA from: " + codePinValue.getCode());
+
                         if (target.equals(TAG)) {
 
                                 final String code = codePinValue.getCode();
@@ -386,8 +391,8 @@ public class BinocularService extends Service {
                                         try{
 
 
-                                            Log.i(TAG, "Sending device data: " + value
-                                            );
+                                            Log.i(TAG, "Sending device data: " + value);
+                                            Log.i(TAG, "Code for sensor: " + code);
                                             if(value != null) {
 
 

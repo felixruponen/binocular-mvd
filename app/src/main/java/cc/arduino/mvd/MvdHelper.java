@@ -248,6 +248,10 @@ public class MvdHelper {
   public static boolean isValidService(String service) {
     boolean valid = false;
 
+    if(service == null) {
+        return false;
+    }
+
     // BEAN
     if (service.equals(BeanService.class.getSimpleName())) {
       return true;
